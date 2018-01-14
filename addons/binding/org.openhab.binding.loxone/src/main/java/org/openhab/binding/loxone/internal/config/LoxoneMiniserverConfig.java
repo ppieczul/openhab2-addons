@@ -70,5 +70,8 @@ public class LoxoneMiniserverConfig {
      * Websocket client's max text message size in kB
      */
     public int maxTextMsgSize;
+    /**
+     * Authentication method (0-auto, 1-hash, 2-token)
+     */
     public int authMethod;
 }

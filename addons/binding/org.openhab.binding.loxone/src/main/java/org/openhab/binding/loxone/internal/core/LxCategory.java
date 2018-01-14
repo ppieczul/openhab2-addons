@@ -8,6 +8,8 @@
  */
 package org.openhab.binding.loxone.internal.core;
 
+import org.openhab.binding.loxone.internal.controls.LxControl;
+
 /**
  * Category of Loxone Miniserver's {@link LxControl} object.
  *
@@ -69,7 +71,7 @@ public class LxCategory extends LxContainer {
      * @param type
      *            new type to set as received from Miniserver
      */
-    void setType(String type) {
+    public void setType(String type) {
         String tl = type.toLowerCase();
         if (tl.equals("lights")) {
             this.type = CategoryType.LIGHTS;

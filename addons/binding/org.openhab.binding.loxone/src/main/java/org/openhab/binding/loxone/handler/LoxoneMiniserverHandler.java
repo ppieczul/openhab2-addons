@@ -11,66 +11,55 @@ package org.openhab.binding.loxone.handler;
 import static org.openhab.binding.loxone.LoxoneBindingConstants.*;
 
 import java.io.IOException;
-import java.math.BigDecimal;
-import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.channels.Channels;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.eclipse.smarthome.config.core.Configuration;
-import org.eclipse.smarthome.core.library.types.DecimalType;
-import org.eclipse.smarthome.core.library.types.OnOffType;
-import org.eclipse.smarthome.core.library.types.PercentType;
-import org.eclipse.smarthome.core.library.types.StopMoveType;
-import org.eclipse.smarthome.core.library.types.StringType;
-import org.eclipse.smarthome.core.library.types.UpDownType;
 import org.eclipse.smarthome.core.thing.Channel;
 import org.eclipse.smarthome.core.thing.ChannelUID;
 import org.eclipse.smarthome.core.thing.Thing;
 import org.eclipse.smarthome.core.thing.ThingStatus;
 import org.eclipse.smarthome.core.thing.ThingStatusDetail;
 import org.eclipse.smarthome.core.thing.ThingTypeUID;
+import org.eclipse.smarthome.core.thing.ThingUID;
 import org.eclipse.smarthome.core.thing.binding.BaseThingHandler;
-import org.eclipse.smarthome.core.thing.binding.builder.ChannelBuilder;
 import org.eclipse.smarthome.core.thing.binding.builder.ThingBuilder;
-import org.eclipse.smarthome.core.thing.type.ChannelTypeUID;
 import org.eclipse.smarthome.core.types.Command;
 import org.eclipse.smarthome.core.types.RefreshType;
+import org.eclipse.smarthome.core.types.State;
 import org.eclipse.smarthome.core.types.StateDescription;
-import org.eclipse.smarthome.core.types.StateOption;
-import org.eclipse.smarthome.core.types.UnDefType;
 import org.openhab.binding.loxone.internal.LoxoneDynamicStateDescriptionProvider;
 import org.openhab.binding.loxone.internal.config.LoxoneMiniserverConfig;
+import org.openhab.binding.loxone.internal.controls.LxControl;
+import org.openhab.binding.loxone.internal.controls.LxControlFactory;
+import org.openhab.binding.loxone.internal.controls.LxControlState;
 import org.openhab.binding.loxone.internal.core.LxCategory;
 import org.openhab.binding.loxone.internal.core.LxContainer;
-import org.openhab.binding.loxone.internal.core.LxControl;
-import org.openhab.binding.loxone.internal.core.LxControlDimmer;
-import org.openhab.binding.loxone.internal.core.LxControlInfoOnlyAnalog;
-import org.openhab.binding.loxone.internal.core.LxControlInfoOnlyDigital;
-import org.openhab.binding.loxone.internal.core.LxControlJalousie;
-import org.openhab.binding.loxone.internal.core.LxControlLightController;
-import org.openhab.binding.loxone.internal.core.LxControlLightControllerV2;
-import org.openhab.binding.loxone.internal.core.LxControlMood;
-import org.openhab.binding.loxone.internal.core.LxControlPushbutton;
-import org.openhab.binding.loxone.internal.core.LxControlRadio;
-import org.openhab.binding.loxone.internal.core.LxControlSwitch;
-import org.openhab.binding.loxone.internal.core.LxControlTextState;
-import org.openhab.binding.loxone.internal.core.LxControlTimedSwitch;
+import org.openhab.binding.loxone.internal.core.LxJsonApp3;
+import org.openhab.binding.loxone.internal.core.LxJsonApp3.LxJsonControl;
 import org.openhab.binding.loxone.internal.core.LxOfflineReason;
-import org.openhab.binding.loxone.internal.core.LxServer;
-import org.openhab.binding.loxone.internal.core.LxServerListener;
+import org.openhab.binding.loxone.internal.core.LxServerEvent;
+import org.openhab.binding.loxone.internal.core.LxServerEvent.EventType;
 import org.openhab.binding.loxone.internal.core.LxUuid;
-import org.openhab.binding.loxone.internal.core.LxWsSecurityType;
+import org.openhab.binding.loxone.internal.core.LxWsClient;
+import org.openhab.binding.loxone.internal.core.LxWsStateUpdateEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.google.gson.Gson;
 
 /**
  * Representation of a Loxone Miniserver. It is an openHAB {@link Thing}, which is used to communicate with
@@ -78,27 +67,37 @@ import org.slf4j.LoggerFactory;
  *
  * @author Pawel Pieczul - Initial contribution
  */
-public class LoxoneMiniserverHandler extends BaseThingHandler implements LxServerListener {
-
+public class LoxoneMiniserverHandler extends BaseThingHandler implements LoxoneMiniserverHandlerApi {
     public static final Set<ThingTypeUID> SUPPORTED_THING_TYPES_UIDS = Collections.singleton(THING_TYPE_MINISERVER);
-
-    private LxServer server;
-
-    private ChannelTypeUID switchTypeId = new ChannelTypeUID(BINDING_ID, MINISERVER_CHANNEL_TYPE_SWITCH);
-    private ChannelTypeUID lightCtrlTypeId = new ChannelTypeUID(BINDING_ID, MINISERVER_CHANNEL_TYPE_LIGHT_CTRL);
-    private ChannelTypeUID radioButtonTypeId = new ChannelTypeUID(BINDING_ID, MINISERVER_CHANNEL_TYPE_RADIO_BUTTON);
-    private ChannelTypeUID rollershutterTypeId = new ChannelTypeUID(BINDING_ID, MINISERVER_CHANNEL_TYPE_ROLLERSHUTTER);
-    private ChannelTypeUID dimmerTypeId = new ChannelTypeUID(BINDING_ID, MINISERVER_CHANNEL_TYPE_DIMMER);
-    private ChannelTypeUID roTextTypeId = new ChannelTypeUID(BINDING_ID, MINISERVER_CHANNEL_TYPE_RO_TEXT);
-    private ChannelTypeUID roSwitchTypeId = new ChannelTypeUID(BINDING_ID, MINISERVER_CHANNEL_TYPE_RO_SWITCH);
-    private ChannelTypeUID roAnalogTypeId = new ChannelTypeUID(BINDING_ID, MINISERVER_CHANNEL_TYPE_RO_ANALOG);
-    private ChannelTypeUID roTimedSwitchDeactivationDelayTypeId = new ChannelTypeUID(BINDING_ID,
-            MINISERVER_CHANNEL_TYPE_RO_NUMBER);
-
-    private Logger logger = LoggerFactory.getLogger(LoxoneMiniserverHandler.class);
-    private Map<ChannelUID, LxControl> controls = new HashMap<>();
+    private final Logger logger = LoggerFactory.getLogger(LoxoneMiniserverHandler.class);
+    private final Gson gson = new Gson();
 
     private LoxoneDynamicStateDescriptionProvider dynamicStateDescriptionProvider;
+    private LxWsClient socketClient;
+
+    private int firstConDelay = 1;
+    private int connectErrDelay = 10;
+    private int userErrorDelay = 60;
+    private int comErrorDelay = 30;
+
+    // Data structures
+    private final Map<LxUuid, LxControl> controls = new HashMap<>();
+    private final Map<ChannelUID, LxControl> channels = new HashMap<>();
+    private final Map<LxUuid, LxContainer> rooms = new HashMap<>();
+    private final Map<LxUuid, LxCategory> categories = new HashMap<>();
+
+    // Map of state UUID to a map of control UUID and state objects
+    // State with a unique UUID can be configured in many controls and each control can even have a different name of
+    // the state. It must be ensured that updates received for this state UUID are passed to all controls that have this
+    // state UUID configured.
+    private Map<LxUuid, Map<LxUuid, LxControlState>> states = new HashMap<>();
+
+    // Services
+    private int debugId = 0;
+    private Thread monitorThread;
+    private final Lock threadLock = new ReentrantLock();
+    private final BlockingQueue<LxServerEvent> queue = new LinkedBlockingQueue<>();
+    private static AtomicInteger STATIC_DEBUG_ID = new AtomicInteger(1);
 
     /**
      * Create {@link LoxoneMiniserverHandler} object
@@ -117,135 +116,23 @@ public class LoxoneMiniserverHandler extends BaseThingHandler implements LxServe
         }
     }
 
+    /*
+     * Methods from BaseThingHandler
+     */
+
     @Override
     public void handleCommand(ChannelUID channelUID, Command command) {
-        if (server == null) {
-            updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
-                    "No server attached to this thing");
+        if (command instanceof RefreshType) {
+            updateChannelState(channelUID);
             return;
         }
-
-        LxControl control = getControlFromChannelUID(channelUID);
-        if (control == null) {
-            // This situation should not happen under normal circumstances, it indicates binding somehow lost its
-            // controls
-            logger.error("Received command {} for unknown control.", command);
-            return;
-        }
-
-        logger.debug("Control '{}' received command: {}", control.getName(), command);
-
         try {
-            if (command instanceof RefreshType) {
-                updateChannelStates(channelUID, control);
-                return;
+            LxControl control = channels.get(channelUID);
+            if (control != null) {
+                control.handleCommand(channelUID, command);
+            } else {
+                logger.error("[{}] Received command {} for unknown control.", debugId, command);
             }
-
-            if (control instanceof LxControlSwitch) {
-                if (command instanceof OnOffType) {
-                    if ((OnOffType) command == OnOffType.ON) {
-                        if (control instanceof LxControlPushbutton) {
-                            ((LxControlPushbutton) control).pulse();
-                        } else {
-                            ((LxControlSwitch) control).on();
-                        }
-                    } else {
-                        ((LxControlSwitch) control).off();
-                    }
-                }
-                return;
-            }
-
-            if (control instanceof LxControlTimedSwitch) {
-                if (command instanceof OnOffType) {
-                    if (command == OnOffType.ON) {
-                        ((LxControlTimedSwitch) control).pulse();
-                    } else {
-                        ((LxControlTimedSwitch) control).off();
-                    }
-                }
-                return;
-            }
-
-            if (control instanceof LxControlDimmer) {
-                LxControlDimmer dimmer = (LxControlDimmer) control;
-                if (command instanceof OnOffType) {
-                    if (command == OnOffType.ON) {
-                        dimmer.on();
-                    } else {
-                        dimmer.off();
-                    }
-                } else if (command instanceof PercentType) {
-                    PercentType percentCmd = (PercentType) command;
-                    dimmer.setPosition(percentCmd.doubleValue());
-                }
-                return;
-            }
-
-            if (control instanceof LxControlJalousie) {
-                LxControlJalousie jalousie = (LxControlJalousie) control;
-                if (command instanceof PercentType) {
-                    jalousie.moveToPosition(((PercentType) command).doubleValue() / 100);
-                } else if (command instanceof UpDownType) {
-                    if ((UpDownType) command == UpDownType.UP) {
-                        jalousie.fullUp();
-                    } else {
-                        jalousie.fullDown();
-                    }
-                } else if (command instanceof StopMoveType) {
-                    if ((StopMoveType) command == StopMoveType.STOP) {
-                        jalousie.stop();
-                    }
-                }
-                return;
-            }
-
-            if (control instanceof LxControlLightController) {
-                LxControlLightController controller = (LxControlLightController) control;
-                if (command instanceof OnOffType) {
-                    if ((OnOffType) command == OnOffType.ON) {
-                        controller.allOn();
-                    } else {
-                        controller.allOff();
-                    }
-                } else if (command instanceof UpDownType) {
-                    if ((UpDownType) command == UpDownType.UP) {
-                        controller.nextScene();
-                    } else {
-                        controller.previousScene();
-                    }
-                } else if (command instanceof DecimalType) {
-                    controller.setScene(((DecimalType) command).intValue());
-                }
-                return;
-            }
-
-            if (control instanceof LxControlLightControllerV2) {
-                LxControlLightControllerV2 controller = (LxControlLightControllerV2) control;
-                if (command instanceof UpDownType) {
-                    if ((UpDownType) command == UpDownType.UP) {
-                        controller.nextMood();
-                    } else {
-                        controller.previousMood();
-                    }
-                } else if (command instanceof DecimalType) {
-                    controller.setMood(((DecimalType) command).intValue());
-                }
-                return;
-            }
-
-            if (control instanceof LxControlRadio) {
-                LxControlRadio radio = (LxControlRadio) control;
-                if (command instanceof OnOffType) {
-                    if ((OnOffType) command == OnOffType.OFF) {
-                        radio.setOutput(0);
-                    }
-                } else if (command instanceof DecimalType) {
-                    radio.setOutput(((DecimalType) command).intValue());
-                }
-                return;
-            }
-            logger.debug("Incompatible operation on control {}", control.getUuid());
         } catch (IOException e) {
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, e.getMessage());
         }
@@ -253,199 +140,161 @@ public class LoxoneMiniserverHandler extends BaseThingHandler implements LxServe
 
     @Override
     public void channelLinked(ChannelUID channelUID) {
-        logger.debug("Channel linked: {}", channelUID.getAsString());
-        LxControl control = getControlFromChannelUID(channelUID);
-        if (control != null) {
-            updateChannelStates(channelUID, control);
-        }
+        logger.debug("[{}] Channel linked: {}", debugId, channelUID.getAsString());
+        updateChannelState(channelUID);
     }
 
     @Override
     public void initialize() {
-        logger.trace("Initializing thing");
+        debugId = STATIC_DEBUG_ID.getAndIncrement();
+        logger.trace("[{}] Initializing thing instance", debugId);
+
         LoxoneMiniserverConfig cfg = getConfig().as(LoxoneMiniserverConfig.class);
+        if (cfg.firstConDelay >= 0 && firstConDelay != cfg.firstConDelay) {
+            logger.debug("[{}] Changing firstConDelay to {}", debugId, cfg.firstConDelay);
+            firstConDelay = cfg.firstConDelay;
+        }
+        if (cfg.connectErrDelay >= 0 && connectErrDelay != cfg.connectErrDelay) {
+            logger.debug("[{}] Changing connectErrDelay to {}", debugId, cfg.connectErrDelay);
+            connectErrDelay = cfg.connectErrDelay;
+        }
+        if (cfg.userErrorDelay >= 0 && userErrorDelay != cfg.userErrorDelay) {
+            logger.debug("[{}] Changing userErrorDelay to {}", debugId, cfg.userErrorDelay);
+            userErrorDelay = cfg.userErrorDelay;
+        }
+        if (cfg.comErrorDelay >= 0 && comErrorDelay != cfg.comErrorDelay) {
+            logger.debug("[{}] Changing comErrorDelay to {}", debugId, cfg.comErrorDelay);
+            comErrorDelay = cfg.comErrorDelay;
+        }
+
         try {
-            InetAddress ip = InetAddress.getByName(cfg.host);
-            server = new LxServer(LxWsSecurityType.getType(cfg.authMethod), ip, cfg.port, cfg.user, cfg.password);
-            server.addListener(this);
-            server.update(cfg.firstConDelay, cfg.keepAlivePeriod, cfg.connectErrDelay, cfg.responseTimeout,
-                    cfg.userErrorDelay, cfg.comErrorDelay, cfg.maxBinMsgSize, cfg.maxTextMsgSize);
-            server.start();
+            socketClient = new LxWsClient(debugId, this, cfg);
+            threadLock.lock();
+            try {
+                if (monitorThread == null) {
+                    monitorThread = new LxServerThread();
+                    monitorThread.start();
+                }
+            } finally {
+                threadLock.unlock();
+            }
         } catch (UnknownHostException e) {
             updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR, "Unknown host");
         }
     }
 
     @Override
-    public void onNewConfig(LxServer server) {
-        logger.trace("Processing new configuration");
-        Thing thing = getThing();
-        thing.setProperty(MINISERVER_PROPERTY_MINISERVER_NAME, server.getMiniserverName());
-        thing.setProperty(MINISERVER_PROPERTY_PROJECT_NAME, server.getProjectName());
-        thing.setProperty(MINISERVER_PROPERTY_CLOUD_ADDRESS, server.getCloudAddress());
-        thing.setProperty(MINISERVER_PROPERTY_PHYSICAL_LOCATION, server.getLocation());
-        thing.setProperty(Thing.PROPERTY_FIRMWARE_VERSION, server.getSwVersion());
-        thing.setProperty(Thing.PROPERTY_SERIAL_NUMBER, server.getSerial());
-        thing.setProperty(Thing.PROPERTY_MAC_ADDRESS, server.getMacAddress());
-
-        ArrayList<Channel> channels = new ArrayList<>();
-        ThingBuilder builder = editThing();
-        controls.clear();
-        dynamicStateDescriptionProvider.removeAllDescriptions();
-
-        logger.trace("Building new channels ({} controls)", server.getControls().size());
-        for (LxControl control : server.getControls().values()) {
-            List<Channel> newChannels = createChannelsForControl(control);
-            if (newChannels != null) {
-                channels.addAll(newChannels);
-                for (Channel channel : newChannels) {
-                    ChannelUID id = channel.getUID();
-                    controls.put(id, control);
+    public void dispose() {
+        logger.debug("[{}] Disposing of thing", debugId);
+        threadLock.lock();
+        try {
+            if (monitorThread != null) {
+                LxServerEvent event = new LxServerEvent(EventType.CLIENT_CLOSING, LxOfflineReason.NONE, null);
+                try {
+                    queue.put(event);
+                } catch (InterruptedException e) {
+                    monitorThread.interrupt();
                 }
+                try {
+                    monitorThread.join(5000);
+                } catch (InterruptedException e) {
+                    logger.warn("[{}] Waiting for thread termination interrupted.", debugId);
+                }
+                monitorThread = null;
+            } else {
+                logger.debug("[{}] Thing dispose - no thread", debugId);
             }
+        } finally {
+            threadLock.unlock();
         }
+        socketClient = null;
+        dynamicStateDescriptionProvider.removeAllDescriptions();
+        controls.clear();
+        channels.clear();
+        rooms.clear();
+        categories.clear();
+        states.clear();
+        queue.clear();
+    }
 
-        logger.trace("Sorting channels");
-        channels.sort(new Comparator<Channel>() {
-            @Override
-            public int compare(Channel c1, Channel c2) {
-                String label = c1.getLabel();
-                if (label == null) {
-                    return 1;
+    /*
+     * Methods from LoxoneMiniserverHandlerApi
+     */
+
+    @Override
+    public void setChannelState(ChannelUID channelId, State state) {
+        updateState(channelId, state);
+    }
+
+    @Override
+    public void setChannelStateDescription(ChannelUID channelId, StateDescription description) {
+        logger.debug("[{}] State description update for channel {}", debugId, channelId);
+        dynamicStateDescriptionProvider.setDescription(channelId, description);
+    }
+
+    @Override
+    public void addControl(LxControl control) {
+        addControlStructures(control);
+        addThingChannels(control.getChannels(), false);
+    }
+
+    @Override
+    public void removeControl(LxControl control) {
+        logger.debug("[{}] Removing control: {}", debugId, control.getName());
+        control.getSubControls().values().forEach(subControl -> removeControl(subControl));
+        LxUuid controlUuid = control.getUuid();
+        control.getStates().values().forEach(state -> {
+            LxUuid stateUuid = state.getUuid();
+            Map<LxUuid, LxControlState> perUuid = states.get(stateUuid);
+            if (perUuid != null) {
+                perUuid.remove(controlUuid);
+                if (perUuid.isEmpty()) {
+                    states.remove(stateUuid);
                 }
-                return label.compareTo(c2.getLabel());
             }
         });
 
-        logger.trace("Updating thing");
-        builder.withChannels(channels);
+        ThingBuilder builder = editThing();
+        control.getChannels().forEach(channel -> {
+            ChannelUID id = channel.getUID();
+            builder.withoutChannel(id);
+            channels.remove(id);
+            dynamicStateDescriptionProvider.removeDescription(id);
+        });
         updateThing(builder.build());
+        controls.remove(controlUuid);
     }
 
     @Override
-    public void onControlStateUpdate(LxControl control, String stateName) {
-        ChannelUID channelId = getChannelIdForControl(control, 0);
-
-        if (control instanceof LxControlLightController
-                && LxControlLightController.STATE_SCENE_LIST.equals(stateName)) {
-            LxControlLightController controller = (LxControlLightController) control;
-            setStateDescription(channelId, null, false, controller.getSceneNames(), BigDecimal.ZERO,
-                    new BigDecimal((LxControlLightController.NUM_OF_SCENES - 1)));
-            return;
-        } else if (control instanceof LxControlLightControllerV2) {
-            LxControlLightControllerV2 controller = (LxControlLightControllerV2) control;
-
-            if (LxControlLightControllerV2.STATE_MOODS_LIST.equals(stateName)) {
-                // A new list of moods arrived as state update - we update dynamic state description for the channel
-                // that represents single mood selection and we create new channels per mood and remove any obsolete
-                // mood channels for this controller
-                Map<LxUuid, LxControlMood> moods = controller.getMoods();
-                if (moods == null) {
-                    logger.debug("Moods list state was received, but mood list is null.");
-                    return;
-                }
-
-                // convert all moods to options list for state description
-                List<StateOption> optionsList = moods.values().stream()
-                        .map(mood -> new StateOption(mood.getId().toString(), mood.getName()))
-                        .collect(Collectors.toList());
-
-                // for all moods but 'all off' mood create and store channels
-                Map<Channel, LxControlMood> newChannels = new HashMap<>();
-                moods.values().stream().filter(mood -> !mood.isAllOffMood()).forEach(
-                        mood -> createChannelsForControl(mood).forEach(channel -> newChannels.put(channel, mood)));
-
-                dynamicStateDescriptionProvider.setDescription(channelId,
-                        new StateDescription(new BigDecimal(controller.getMinMoodId()),
-                                new BigDecimal(controller.getMaxMoodId()), BigDecimal.ONE, null, false, optionsList));
-
-                // collect all moods that currently belong to this controller
-                List<ChannelUID> toRemove = new ArrayList<>();
-                controls.forEach((k, v) -> {
-                    if (v instanceof LxControlMood
-                            && controller.getUuid().equals(((LxControlMood) v).getControllerUuid())
-                            && !newChannels.containsKey(k)) {
-                        toRemove.add(k);
-                    }
-                });
-
-                // remove the collected mood channels from the thing and controls
-                ThingBuilder builder = editThing();
-                toRemove.forEach(k -> {
-                    builder.withoutChannel(k);
-                    controls.remove(k);
-                });
-
-                // add channels for the new moods
-                newChannels.forEach((k, v) -> {
-                    builder.withChannel(k);
-                    controls.put(k.getUID(), v);
-                });
-
-                updateThing(builder.build());
-                return;
-            }
-        }
-        // for all state updates not handled above just update the channel state the regular way
-        updateChannelStates(channelId, control);
+    public void sendAction(LxUuid id, String operation) throws IOException {
+        socketClient.sendAction(id, operation);
     }
 
     @Override
-    public void onServerGoesOnline() {
-        logger.debug("Server goes online.");
-        updateStatus(ThingStatus.ONLINE);
-    }
-
-    @Override
-    public void onServerGoesOffline(LxOfflineReason reason, String details) {
-        logger.debug("Server goes offline: {}, {}", reason, details);
-
-        switch (reason) {
-            case AUTHENTICATION_TIMEOUT:
-                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, "User authentication timeout");
-                break;
-            case COMMUNICATION_ERROR:
-                String text = "Error communicating with Miniserver";
-                if (details != null) {
-                    text += " (" + details + ")";
-                }
-                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, text);
-                break;
-            case INTERNAL_ERROR:
-                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
-                        details != null ? "Internal error (" + details + ")" : "Internal error");
-                break;
-            case TOO_MANY_FAILED_LOGIN_ATTEMPTS:
-                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
-                        "Too many failed login attempts - stopped trying");
-                break;
-            case UNAUTHORIZED:
-                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
-                        details != null ? details : "User authentication error (invalid user name or password)");
-                break;
-            case IDLE_TIMEOUT:
-                logger.warn("Idle timeout from Loxone Miniserver - adjust keepalive settings");
-                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, "Timeout due to no activity");
-                break;
-            default:
-                updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR, "Unknown reason");
-                break;
+    public boolean sendEvent(LxServerEvent event) {
+        try {
+            queue.put(event);
+            return true;
+        } catch (InterruptedException e) {
+            logger.debug("[{}] Interrupted queue operation", debugId);
+            return false;
         }
     }
 
     @Override
-    public void dispose() {
-        logger.debug("Disposing of server");
-        dynamicStateDescriptionProvider.removeAllDescriptions();
-        if (server != null) {
-            server.stop();
-            server = null;
-        }
+    public ThingUID getThingId() {
+        return getThing().getUID();
     }
 
     @Override
-    public Object getSetting(String name) {
-        return getConfig().get(name);
+    public Gson getGson() {
+        return gson;
+    }
+
+    @Override
+    public String getSetting(String name) {
+        Object value = getConfig().get(name);
+        return (value instanceof String) ? (String) value : null;
     }
 
     @Override
@@ -456,294 +305,398 @@ public class LoxoneMiniserverHandler extends BaseThingHandler implements LxServe
     }
 
     /**
-     * Create and add a new channel to the channels list.
+     * Parses received configuration, updates thing properties and creates appropriate room, category and control
+     * objects. Creates channels and registers channel state descriptions in the provider.
+     * This call does not purge previous configuration, but updates existing objects and removes objects which don't
+     * exist anymore in the Miniserver.
      *
-     * @param channels
-     *            list of channels to add the channel to
-     * @param itemType
-     *            item type for the channel
-     * @param typeId
-     *            channel type ID for the channel
-     * @param channelId
-     *            channel ID
-     * @param channelLabel
-     *            channel label
-     * @param channelDescription
-     *            channel description
-     * @param tags
-     *            tags for the channel or null if no tags needed
-     * @return
-     *         true if channel was created and added to the list
+     * @param config
+     *            json with configuration received from the Miniserver
      */
-    private boolean addChannel(List<Channel> channels, String itemType, ChannelTypeUID typeId, ChannelUID channelId,
-            String channelLabel, String channelDescription, Set<String> tags) {
-        if (channels != null && channelId != null && itemType != null && typeId != null && channelDescription != null) {
-            ChannelBuilder builder = ChannelBuilder.create(channelId, itemType).withType(typeId).withLabel(channelLabel)
-                    .withDescription(channelDescription + " : " + channelLabel);
-            if (tags != null) {
-                builder.withDefaultTags(tags);
+    private void updateConfig(LxJsonApp3 config) {
+        logger.debug("[{}] Updating configuration from Miniserver", debugId);
+        invalidateMap(rooms);
+        invalidateMap(categories);
+        invalidateMap(controls);
+        invalidateMap(states);
+
+        if (config.msInfo != null) {
+            logger.trace("[{}] updating global config", debugId);
+            Thing thing = getThing();
+            thing.setProperty(MINISERVER_PROPERTY_MINISERVER_NAME, buildName(config.msInfo.msName));
+            thing.setProperty(MINISERVER_PROPERTY_PROJECT_NAME, buildName(config.msInfo.projectName));
+            thing.setProperty(MINISERVER_PROPERTY_CLOUD_ADDRESS, buildName(config.msInfo.remoteUrl));
+            thing.setProperty(MINISERVER_PROPERTY_PHYSICAL_LOCATION, buildName(config.msInfo.location));
+            thing.setProperty(Thing.PROPERTY_FIRMWARE_VERSION, buildName(config.msInfo.swVersion));
+            thing.setProperty(Thing.PROPERTY_SERIAL_NUMBER, buildName(config.msInfo.serialNr));
+            thing.setProperty(Thing.PROPERTY_MAC_ADDRESS, buildName(config.msInfo.macAddress));
+        } else {
+            logger.warn("[{}] missing global configuration msInfo on Loxone", debugId);
+        }
+
+        // create internal structures based on configuration file
+        if (config.rooms != null) {
+            logger.trace("[{}] creating rooms", debugId);
+            config.rooms.values().forEach(room -> addOrUpdateRoom(new LxUuid(room.uuid), room.name));
+        }
+        if (config.cats != null) {
+            logger.trace("[{}] creating categories", debugId);
+            config.cats.values().forEach(cat -> addOrUpdateCategory(new LxUuid(cat.uuid), cat.name, cat.type));
+        }
+        if (config.controls != null) {
+            logger.trace("[{}] creating controls", debugId);
+            config.controls.values().forEach(ctrl -> {
+                // create a new control or update existing one
+                try {
+                    addOrUpdateControl(ctrl);
+                } catch (Exception e) {
+                    logger.error("[{}] exception creating control {}: {}", debugId, ctrl.name, e);
+                }
+            });
+        }
+        // remove items that do not exist anymore in Miniserver
+        logger.trace("[{}] removing unused objects", debugId);
+        removeUnusedFromMap(rooms);
+        removeUnusedFromMap(categories);
+        removeUnusedFromMap(controls);
+        removeUnusedFromMap(states);
+
+        // merge control channels and update thing
+        List<Channel> channels = new ArrayList<>();
+        controls.values().forEach(control -> channels.addAll(control.getChannels()));
+        addThingChannels(channels, true);
+    }
+
+    /**
+     * Adds channels to the thing, to make them available to the framework and user.
+     * This method will sort the channels according to their label.
+     * It is expected that input list contains no duplicate channel IDs.
+     *
+     * @param newChannels
+     *            a list of channels to add to the thing
+     * @param purge
+     *            if true, old channels will be removed, otherwise merged
+     */
+    private void addThingChannels(List<Channel> newChannels, boolean purge) {
+        List<Channel> channels = newChannels;
+        if (!purge) {
+            channels.addAll(getThing().getChannels());
+        }
+        channels.sort((c1, c2) -> {
+            String label = c1.getLabel();
+            return label == null ? 1 : label.compareTo(c2.getLabel());
+        });
+        ThingBuilder builder = editThing();
+        builder.withChannels(channels);
+        updateThing(builder.build());
+    }
+
+    /**
+     * Removes all entries from a map, that do not have the 'updated' flag set on UUID key
+     *
+     * @param <T>
+     *            any type of container used in the map
+     * @param map
+     *            map to remove entries from
+     */
+    private <T> void removeUnusedFromMap(Map<LxUuid, T> map) {
+        for (Iterator<Map.Entry<LxUuid, T>> it = map.entrySet().iterator(); it.hasNext();) {
+            Map.Entry<LxUuid, T> entry = it.next();
+            if (!entry.getKey().getUpdate()) {
+                it.remove();
+                if (entry.getValue() instanceof LxControl) {
+                    LxControl control = (LxControl) entry.getValue();
+                    control.getChannels().forEach(channel -> {
+                        ChannelUID id = channel.getUID();
+                        channels.remove(id);
+                        dynamicStateDescriptionProvider.removeDescription(id);
+                    });
+                    control.dispose();
+                }
             }
-            Channel newChannel = builder.build();
-            channels.add(newChannel);
+        }
+    }
+
+    /**
+     * Sets all entries in a map to not updated
+     *
+     * @param map
+     *            map to invalidate entries in
+     */
+    private void invalidateMap(Map<LxUuid, ?> map) {
+        map.keySet().forEach(k -> {
+            k.setUpdate(false);
+        });
+    }
+
+    /**
+     * Add a room to the server, if a room with the same UUID already exists, update it with the new name.
+     *
+     * @param id
+     *            UUID of the room to add
+     * @param name
+     *            name of the room to add
+     * @return
+     *         room object (either newly created or already existing) or null if wrong parameters
+     */
+    private LxContainer addOrUpdateRoom(LxUuid id, String name) {
+        LxContainer r = rooms.get(id);
+        if (r != null) {
+            r.setName(name);
+            return r;
+        }
+        LxContainer nr = new LxContainer(id, name);
+        rooms.put(id, nr);
+        return nr;
+    }
+
+    /**
+     * Add a new category or update and return existing one with same UUID
+     *
+     * @param id
+     *            UUID of the category to add or update
+     * @param name
+     *            name of the category
+     * @param type
+     *            type of the category
+     * @return
+     *         newly added category or already existing and updated, null if wrong parameters/configuration
+     */
+    private LxCategory addOrUpdateCategory(LxUuid id, String name, String type) {
+        LxCategory c = categories.get(id);
+        if (c != null) {
+            c.setName(name);
+            c.setType(type);
+            return c;
+        }
+        LxCategory nc = new LxCategory(id, name, type);
+        categories.put(id, nc);
+        return nc;
+    }
+
+    /**
+     * Add a new control, its states, subcontrols and channels or update and return existing one with the same UUID
+     *
+     * @param json
+     *            JSON original object of this control to get extra parameters
+     */
+    private void addOrUpdateControl(LxJsonControl json) {
+        if (json == null || json.uuidAction == null || json.name == null || json.type == null) {
+            return;
+        }
+
+        LxUuid categoryId = null;
+        if (json.cat != null) {
+            categoryId = new LxUuid(json.cat);
+        }
+        LxUuid roomId = null;
+        if (json.room != null) {
+            roomId = new LxUuid(json.room);
+        }
+        LxContainer room = rooms.get(roomId);
+        LxCategory category = categories.get(categoryId);
+
+        LxUuid id = new LxUuid(json.uuidAction);
+        LxControl control = controls.get(id);
+        if (control != null) {
+            control.update(json, room, category);
+        } else {
+            control = LxControlFactory.createControl(this, id, json, room, category);
+        }
+        if (control != null) {
+            addControlStructures(control);
+        }
+    }
+
+    /**
+     * Add a new control, its states, subcontrols and channels.
+     *
+     * @param control
+     *            a created control object to be added
+     */
+    private void addControlStructures(LxControl control) {
+        LxUuid uuid = control.getUuid();
+        logger.debug("[{}] Adding control: {}, {}", debugId, uuid, control.getName());
+        control.getStates().values().forEach(state -> {
+            state.getUuid().setUpdate(true);
+            Map<LxUuid, LxControlState> perUuid = states.get(state.getUuid());
+            if (perUuid == null) {
+                perUuid = new HashMap<>();
+                states.put(state.getUuid(), perUuid);
+            }
+            perUuid.put(uuid, state);
+        });
+        controls.put(control.getUuid(), control);
+        control.getChannels().forEach(channel -> channels.put(channel.getUID(), control));
+        control.getSubControls().values().forEach(subControl -> addControlStructures(subControl));
+        uuid.setUpdate(true);
+    }
+
+    /**
+     * Updates an actual state of a channel.
+     * Determines control for the channel and retrieves the state from the control.
+     *
+     * @param channelId
+     *            channel ID to update its state
+     */
+    private void updateChannelState(ChannelUID channelId) {
+        LxControl control = channels.get(channelId);
+        if (control != null) {
+            State state = control.getChannelState(channelId);
+            if (state != null) {
+                updateState(channelId, state);
+            }
+        } else {
+            logger.error("[{}] Received state update request for unknown control (channelId={}).", debugId, channelId);
+        }
+    }
+
+    /**
+     * Check and convert null string to empty string.
+     *
+     * @param name
+     *            string to check
+     * @return
+     *         string guaranteed to be not null
+     */
+    private String buildName(String name) {
+        if (name == null) {
+            return "";
+        }
+        return name;
+    }
+
+    /**
+     * Thread that performs and supervises communication with the Miniserver.
+     * <p>
+     * It will try to maintain the connection as long as possible, handling errors and interruptions. There are two
+     * reasons when this thread will terminate and stop connecting to the Miniserver:
+     * when it receives close command from supervisor (thing handler) or when Miniserver locks out user due to too
+     * many unsuccessful login attempts.
+     *
+     * @author Pawel Pieczul - initial contribution
+     *
+     */
+    private class LxServerThread extends Thread {
+        private boolean running = true;
+        // initial delay to initiate connection
+        private int waitTime = firstConDelay;
+
+        @Override
+        public void run() {
+            logger.debug("[{}] Thread starting", debugId);
+            try {
+                boolean connected = false;
+                while (running) {
+                    while (!connected) {
+                        LxServerEvent wsMsg;
+                        do {
+                            wsMsg = queue.poll(waitTime, TimeUnit.SECONDS);
+                            if (wsMsg != null) {
+                                processMessage(wsMsg);
+                            }
+                        } while (wsMsg != null);
+                        logger.debug("[{}] Server connecting to websocket", debugId);
+                        connected = socketClient.connect();
+                        if (!connected) {
+                            waitTime = connectErrDelay;
+                        }
+                    }
+                    while (connected) {
+                        LxServerEvent wsMsg = queue.take();
+                        connected = processMessage(wsMsg);
+                    }
+                }
+            } catch (InterruptedException e) {
+                logger.debug("[{}] Server thread interrupted, terminating", debugId);
+            }
+            logger.debug("[{}] Thread ending", debugId);
+            socketClient.disconnect();
+        }
+
+        private boolean processMessage(LxServerEvent wsMsg) {
+            EventType event = wsMsg.getEvent();
+            logger.trace("[{}] Server received event: {}", debugId, event);
+            switch (event) {
+                case RECEIVED_CONFIG:
+                    LxJsonApp3 config = (LxJsonApp3) wsMsg.getObject();
+                    if (config != null) {
+                        updateConfig(config);
+                    } else {
+                        logger.debug("[{}] Server failed processing received configuration", debugId);
+                    }
+                    break;
+                case STATE_UPDATE:
+                    LxWsStateUpdateEvent update = (LxWsStateUpdateEvent) wsMsg.getObject();
+                    Map<LxUuid, LxControlState> perStateUuid = states.get(update.getUuid());
+                    if (perStateUuid != null) {
+                        perStateUuid.forEach((controlUuid, state) -> {
+                            state.setValue(update.getValue(), update.getText());
+                        });
+                    }
+                    break;
+                case SERVER_ONLINE:
+                    updateStatus(ThingStatus.ONLINE);
+                    break;
+                case SERVER_OFFLINE:
+                    LxOfflineReason reason = wsMsg.getOfflineReason();
+                    String details = null;
+                    if (wsMsg.getObject() instanceof String) {
+                        details = (String) wsMsg.getObject();
+                    }
+                    logger.debug("[{}] Websocket goes OFFLINE, reason {} : {}.", debugId, reason, details);
+                    processOfflineReason(reason, details);
+                    return false;
+                case CLIENT_CLOSING:
+                    running = false;
+                    return false;
+                default:
+                    logger.debug("[{}] Received unknown request {}", debugId, wsMsg.getEvent().name());
+                    break;
+            }
             return true;
         }
-        return false;
-    }
 
-    /**
-     * Creates a new list of {@link Channel} for a single Loxone control object. Registers channel type within the
-     * factory, which is the channel type provider, or uses one of pre-registered type.
-     * Most of controls create only one channel, but some of them will create more channels to facilitate different
-     * types of states they support.
-     *
-     * @param control
-     *            control object to create a channel for
-     * @return
-     *         created list of {@link Channel} object
-     */
-    private List<Channel> createChannelsForControl(LxControl control) {
-        logger.trace("Creating channels for control: {}, {}", control.getClass().getSimpleName(), control.getUuid());
-
-        String label;
-        ChannelUID id = getChannelIdForControl(control, 0);
-
-        List<Channel> channels = new ArrayList<>();
-
-        LxContainer room = control.getRoom();
-        String roomName = room != null ? room.getName() : null;
-
-        String controlName = control.getName();
-        if (controlName == null) {
-            // Each control on a Miniserver must have a name defined, but in case this is a subject
-            // of some malicious data attack, we'll prevent null pointer exception
-            controlName = "Undefined name";
-        }
-
-        if (control instanceof LxControlMood) {
-            controlName = "Mood / " + controlName;
-        }
-        if (roomName != null) {
-            label = roomName + " / " + controlName;
-        } else {
-            label = controlName;
-        }
-
-        Set<String> tags = new HashSet<>();
-        addChannelTags(tags, control);
-
-        // LxControlSwitch covers LxControlPushbutton, LxControlMood and LxControlTimedSwitch as child classes
-        if (control instanceof LxControlSwitch) {
-            String description;
-            if (control instanceof LxControlTimedSwitch) {
-                description = "Timed switch";
-                // adding a deactivation delay channel for timed switch, don't tag it
-                ChannelUID deactivationDelayChannelId = getChannelIdForControl(control, 1);
-                addChannel(channels, "Number", roTimedSwitchDeactivationDelayTypeId, deactivationDelayChannelId,
-                        label + " / Deactivation Delay", "Deactivation Delay", null);
-            } else if (control instanceof LxControlPushbutton) {
-                // this must be compared after LxControlTimedSwitch (pusbutton is parent class)
-                description = "Pushbutton";
-            } else if (control instanceof LxControlMood) {
-                description = "Mood mixer";
-            } else {
-                description = "Switch";
-            }
-            addChannel(channels, "Switch", switchTypeId, id, label, description, tags);
-        } else if (control instanceof LxControlJalousie) {
-            addChannel(channels, "Rollershutter", rollershutterTypeId, id, label, "Rollershutter", tags);
-        } else if (control instanceof LxControlInfoOnlyDigital) {
-            addChannel(channels, "Switch", roSwitchTypeId, id, label, "Digital virtual state", tags);
-        } else if (control instanceof LxControlInfoOnlyAnalog) {
-            // add both channel and state description (all needed configuration is available)
-            if (addChannel(channels, "Number", roAnalogTypeId, id, label, "Analog virtual state", tags)) {
-                setStateDescription(id, ((LxControlInfoOnlyAnalog) control).getFormatString(), true, null, null, null);
-            }
-        } else if (control instanceof LxControlLightController) {
-            // add only channel, state description will be added later when a control state update message is received
-            addChannel(channels, "Number", lightCtrlTypeId, id, label, "Light controller", tags);
-        } else if (control instanceof LxControlLightControllerV2) {
-            // add only channel, state description will be added later when a control state update message is received
-            addChannel(channels, "Number", lightCtrlTypeId, id, label, "Light controller V2", tags);
-        } else if (control instanceof LxControlRadio) {
-            // add both channel and state description (all needed configuration is available)
-            if (addChannel(channels, "Number", radioButtonTypeId, id, label, "Radio button", tags)) {
-                setStateDescription(id, null, false, ((LxControlRadio) control).getOutputs(), BigDecimal.ZERO,
-                        new BigDecimal(LxControlRadio.MAX_RADIO_OUTPUTS));
-            }
-        } else if (control instanceof LxControlTextState) {
-            addChannel(channels, "String", roTextTypeId, id, label, "Text state", tags);
-        } else if (control instanceof LxControlDimmer) {
-            addChannel(channels, "Dimmer", dimmerTypeId, id, label, "Dimmer", tags);
-        }
-        return channels;
-    }
-
-    /**
-     * Add tags that can be used by homekit transport and Alexa openHAB skill
-     *
-     * @param tags
-     *            collection to add tags to
-     * @param control
-     *            control object for which the tags are to be identified
-     */
-    private void addChannelTags(Set<String> tags, LxControl control) {
-        if (control instanceof LxControlSwitch) {
-            // All switches that belong to the lights category can be turned on or off by voice
-            LxCategory category = control.getCategory();
-            if (category != null && category.getType() == LxCategory.CategoryType.LIGHTS) {
-                tags.add("Lighting");
+        private void processOfflineReason(LxOfflineReason reason, String details) {
+            switch (reason) {
+                case TOO_MANY_FAILED_LOGIN_ATTEMPTS:
+                    // assume credentials are wrong, do not re-attempt connections
+                    // close thread and expect a new LxServer object will have to be re-created
+                    // with corrected configuration
+                    running = false;
+                    updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
+                            "Too many failed login attempts - stopped trying");
+                    break;
+                case UNAUTHORIZED:
+                    waitTime = userErrorDelay;
+                    updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
+                            details != null ? details : "User authentication error (invalid user name or password)");
+                    break;
+                case AUTHENTICATION_TIMEOUT:
+                    updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
+                            "User authentication timeout");
+                    break;
+                case COMMUNICATION_ERROR:
+                    waitTime = comErrorDelay;
+                    String text = "Error communicating with Miniserver";
+                    if (details != null) {
+                        text += " (" + details + ")";
+                    }
+                    updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR, text);
+                    break;
+                case INTERNAL_ERROR:
+                    updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR,
+                            details != null ? "Internal error (" + details + ")" : "Internal error");
+                    break;
+                case IDLE_TIMEOUT:
+                    logger.warn("Idle timeout from Loxone Miniserver - adjust keepalive settings");
+                    updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.COMMUNICATION_ERROR,
+                            "Timeout due to no activity");
+                    break;
+                default:
+                    updateStatus(ThingStatus.OFFLINE, ThingStatusDetail.CONFIGURATION_ERROR, "Unknown reason");
+                    break;
             }
         }
-    }
-
-    /**
-     * Update thing's states for all channels associated with the control
-     *
-     * @param channelId
-     *            first channel for the control
-     * @param control
-     *            control to update states for
-     */
-    private void updateChannelStates(ChannelUID channelId, LxControl control) {
-        if (control instanceof LxControlSwitch) {
-            Double value = ((LxControlSwitch) control).getState();
-            if (value != null) {
-                if (value == 1.0) {
-                    updateState(channelId, OnOffType.ON);
-                } else if (value == 0) {
-                    updateState(channelId, OnOffType.OFF);
-                }
-            }
-            // timed switch is a child class of a switch
-            if (control instanceof LxControlTimedSwitch) {
-                // getting second channel for this control and update the state
-                LxControlTimedSwitch timedSwitch = (LxControlTimedSwitch) control;
-                Double deactivationValue = timedSwitch.getDeactivationDelay();
-                if (deactivationValue != null) {
-                    updateState(getChannelIdForControl(timedSwitch, 1), new DecimalType(deactivationValue));
-                }
-            }
-        } else if (control instanceof LxControlJalousie) {
-            Double value = ((LxControlJalousie) control).getPosition();
-            if (value != null && value >= 0 && value <= 1) {
-                // state UP or DOWN from Loxone indicates blinds are moving up or down
-                // state UP in openHAB means blinds are fully up (0%) and DOWN means fully down (100%)
-                // so we will update only position and not up or down states
-                updateState(channelId, new PercentType((int) (value * 100)));
-            }
-        } else if (control instanceof LxControlDimmer) {
-            Double value = ((LxControlDimmer) control).getPosition();
-            if (value != null && value >= 0 && value <= 100) {
-                updateState(channelId, new PercentType(value.intValue()));
-            }
-        } else if (control instanceof LxControlInfoOnlyDigital) {
-            Double value = ((LxControlInfoOnlyDigital) control).getValue();
-            if (value != null) {
-                if (value == 0) {
-                    updateState(channelId, OnOffType.OFF);
-                } else if (value == 1.0) {
-                    updateState(channelId, OnOffType.ON);
-                }
-            }
-        } else if (control instanceof LxControlInfoOnlyAnalog) {
-            Double value = ((LxControlInfoOnlyAnalog) control).getValue();
-            if (value != null) {
-                updateState(channelId, new DecimalType(value));
-            }
-        } else if (control instanceof LxControlLightController) {
-            LxControlLightController controller = (LxControlLightController) control;
-            Integer value = controller.getCurrentScene();
-            if (value != null && value >= 0 && value < LxControlLightController.NUM_OF_SCENES) {
-                updateState(channelId, new DecimalType(value));
-            }
-        } else if (control instanceof LxControlLightControllerV2) {
-            LxControlLightControllerV2 controller = (LxControlLightControllerV2) control;
-            List<Integer> activeMoods = controller.getActiveMoods();
-            // update the single mood channel state
-            if (activeMoods.size() == 1) {
-                updateState(channelId, new DecimalType(activeMoods.get(0)));
-            } else {
-                updateState(channelId, UnDefType.UNDEF);
-            }
-            // update the individual mood mixing channels
-            Map<LxUuid, LxControlMood> allMoods = controller.getMoods();
-            allMoods.values().forEach(v -> {
-                // we update moods like all other switches with no special dedicated code
-                updateChannelStates(getChannelIdForControl(v, 0), v);
-            });
-        } else if (control instanceof LxControlRadio) {
-            LxControlRadio radio = (LxControlRadio) control;
-            Integer output = radio.getActiveOutput();
-            if (output != null && output >= 0 && output <= LxControlRadio.MAX_RADIO_OUTPUTS) {
-                updateState(channelId, new DecimalType(output));
-            }
-        } else if (control instanceof LxControlTextState) {
-            LxControlTextState state = (LxControlTextState) control;
-            String value = state.getText();
-            if (value != null) {
-                updateState(channelId, new StringType(value));
-            }
-        }
-    }
-
-    /**
-     * Sets a new {@link StateDescription} for a channel that has multiple options to select from or a custom format
-     * string. A previous description, if existed, will be replaced.
-     *
-     * @param channelUID
-     *            channel UID
-     * @param format
-     *            format string to present the value
-     * @param readOnly
-     *            true if this control does not accept commands
-     * @param options
-     *            collection of options, where key is option ID (number in reality) and value is option name
-     * @param minimum
-     *            minimum value an option ID can have
-     * @param maximum
-     *            maximum value an option ID can have
-     */
-    private void setStateDescription(ChannelUID channelUID, String format, boolean readOnly,
-            Map<String, String> options, BigDecimal minimum, BigDecimal maximum) {
-        if (channelUID != null) {
-            List<StateOption> optionsList = null;
-            if (options != null) {
-                optionsList = options.entrySet().stream().map(e -> new StateOption(e.getKey(), e.getValue()))
-                        .collect(Collectors.toList());
-            }
-            dynamicStateDescriptionProvider.setDescription(channelUID,
-                    new StateDescription(minimum, maximum, BigDecimal.ONE, format, readOnly, optionsList));
-        }
-    }
-
-    /**
-     * Based on channel ID, return corresponding {@link LxControl} object
-     *
-     * @param channelUID
-     *            channel ID of the control to find
-     * @return
-     *         control corresponding to the channel ID or null if not found
-     */
-    private LxControl getControlFromChannelUID(ChannelUID channelUID) {
-        return controls.get(channelUID);
-    }
-
-    /**
-     * Build channel ID for a control, based on control's UUID, thing's UUID and index of the channel for the control
-     *
-     * @param control
-     *            control to build the channel ID for
-     * @param index
-     *            index of a channel within control (0 for primary channel)
-     *            all indexes greater than 0 will have -index added to the channel ID
-     * @return
-     *         channel ID for the control and index
-     */
-    private ChannelUID getChannelIdForControl(LxControl control, int index) {
-        String controlId = control.getUuid().toString();
-        if (index > 0) {
-            controlId += "-" + index;
-        }
-        return new ChannelUID(getThing().getUID(), controlId);
     }
 }

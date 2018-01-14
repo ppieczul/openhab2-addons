@@ -19,8 +19,8 @@ import javax.crypto.spec.SecretKeySpec;
 
 import org.apache.commons.codec.DecoderException;
 import org.apache.commons.codec.binary.Hex;
+import org.openhab.binding.loxone.handler.LoxoneMiniserverHandlerApi;
 import org.openhab.binding.loxone.internal.core.LxJsonResponse.LxJsonSubResponse;
-import org.openhab.binding.loxone.internal.core.LxServer.Configuration;
 import org.openhab.binding.loxone.internal.core.LxWsClient.LxWebSocket;
 
 /**
@@ -36,7 +36,7 @@ abstract class LxWsSecurity {
     final String user;
     final String password;
     final LxWebSocket socket;
-    final Configuration configuration;
+    final LoxoneMiniserverHandlerApi handlerApi;
 
     LxOfflineReason reason;
     String details;
@@ -49,8 +49,8 @@ abstract class LxWsSecurity {
      *
      * @param debugId
      *            instance of the client used for debugging purposes only
-     * @param configuration
-     *            configuration object for getting and setting custom properties (e.g. token)
+     * @param handlerApi
+     *            API to the thing handler
      * @param socket
      *            websocket to perform communication with Miniserver
      * @param user
@@ -58,9 +58,9 @@ abstract class LxWsSecurity {
      * @param password
      *            password to authenticate
      */
-    LxWsSecurity(int debugId, Configuration configuration, LxWebSocket socket, String user, String password) {
+    LxWsSecurity(int debugId, LoxoneMiniserverHandlerApi handlerApi, LxWebSocket socket, String user, String password) {
         this.debugId = debugId;
-        this.configuration = configuration;
+        this.handlerApi = handlerApi;
         this.socket = socket;
         this.user = user;
         this.password = password;
@@ -205,8 +205,8 @@ abstract class LxWsSecurity {
      *            Miniserver's software version or null if unknown
      * @param debugId
      *            instance of the client used for debugging purposes only
-     * @param configuration
-     *            configuration object for getting and setting custom properties (e.g. token)
+     * @param handlerApi
+     *            API to the thing handler
      * @param socket
      *            websocket to perform communication with Miniserver
      * @param user
@@ -216,8 +216,8 @@ abstract class LxWsSecurity {
      * @return
      *         created security object
      */
-    static LxWsSecurity create(LxWsSecurityType type, String swVersion, int debugId, Configuration configuration,
-            LxWebSocket socket, String user, String password) {
+    static LxWsSecurity create(LxWsSecurityType type, String swVersion, int debugId,
+            LoxoneMiniserverHandlerApi handlerApi, LxWebSocket socket, String user, String password) {
         LxWsSecurityType securityType = type;
         if (securityType == LxWsSecurityType.AUTO && swVersion != null) {
             String[] versions = swVersion.split("[.]");
@@ -228,9 +228,9 @@ abstract class LxWsSecurity {
             }
         }
         if (securityType == LxWsSecurityType.HASH) {
-            return new LxWsSecurityHash(debugId, configuration, socket, user, password);
+            return new LxWsSecurityHash(debugId, handlerApi, socket, user, password);
         } else {
-            return new LxWsSecurityToken(debugId, configuration, socket, user, password);
+            return new LxWsSecurityToken(debugId, handlerApi, socket, user, password);
         }
     }
 

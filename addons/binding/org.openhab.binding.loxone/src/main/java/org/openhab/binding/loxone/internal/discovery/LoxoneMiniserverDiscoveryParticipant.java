@@ -38,7 +38,7 @@ import org.slf4j.LoggerFactory;
 @Component(immediate = true)
 public class LoxoneMiniserverDiscoveryParticipant implements UpnpDiscoveryParticipant {
 
-    private Logger logger = LoggerFactory.getLogger(LoxoneMiniserverDiscoveryParticipant.class);
+    private final Logger logger = LoggerFactory.getLogger(LoxoneMiniserverDiscoveryParticipant.class);
 
     @Override
     public Set<ThingTypeUID> getSupportedThingTypeUIDs() {

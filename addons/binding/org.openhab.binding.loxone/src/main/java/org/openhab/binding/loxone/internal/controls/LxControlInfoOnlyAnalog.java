@@ -6,9 +6,23 @@
  * which accompanies this distribution, and is available at
  * http://www.eclipse.org/legal/epl-v10.html
  */
-package org.openhab.binding.loxone.internal.core;
+package org.openhab.binding.loxone.internal.controls;
 
+import static org.openhab.binding.loxone.LoxoneBindingConstants.*;
+
+import java.io.IOException;
+
+import org.eclipse.smarthome.core.library.types.DecimalType;
+import org.eclipse.smarthome.core.thing.ChannelUID;
+import org.eclipse.smarthome.core.thing.type.ChannelTypeUID;
+import org.eclipse.smarthome.core.types.Command;
+import org.eclipse.smarthome.core.types.State;
+import org.eclipse.smarthome.core.types.StateDescription;
+import org.openhab.binding.loxone.handler.LoxoneMiniserverHandlerApi;
+import org.openhab.binding.loxone.internal.core.LxCategory;
+import org.openhab.binding.loxone.internal.core.LxContainer;
 import org.openhab.binding.loxone.internal.core.LxJsonApp3.LxJsonControl;
+import org.openhab.binding.loxone.internal.core.LxUuid;
 
 /**
  * An InfoOnlyAnalog type of control on Loxone Miniserver.
@@ -23,8 +37,9 @@ public class LxControlInfoOnlyAnalog extends LxControl {
 
     static class Factory extends LxControlInstance {
         @Override
-        LxControl create(LxWsClient client, LxUuid uuid, LxJsonControl json, LxContainer room, LxCategory category) {
-            return new LxControlInfoOnlyAnalog(client, uuid, json, room, category);
+        LxControl create(LoxoneMiniserverHandlerApi handlerApi, LxUuid uuid, LxJsonControl json, LxContainer room,
+                LxCategory category) {
+            return new LxControlInfoOnlyAnalog(handlerApi, uuid, json, room, category);
         }
 
         @Override
@@ -41,19 +56,14 @@ public class LxControlInfoOnlyAnalog extends LxControl {
      * InfoOnlyAnalog state with current value
      */
     private static final String STATE_VALUE = "value";
-    /**
-     * InfoOnlyAnalog state with error value
-     */
-    @SuppressWarnings("unused")
-    private static final String STATE_ERROR = "error";
 
     private String format;
 
     /**
      * Create InfoOnlyAnalog control object.
      *
-     * @param client
-     *            communication client used to send commands to the Miniserver
+     * @param handlerApi
+     *            thing handler object representing the Miniserver
      * @param uuid
      *            control's UUID
      * @param json
@@ -63,8 +73,15 @@ public class LxControlInfoOnlyAnalog extends LxControl {
      * @param category
      *            category to which control belongs
      */
-    LxControlInfoOnlyAnalog(LxWsClient client, LxUuid uuid, LxJsonControl json, LxContainer room, LxCategory category) {
-        super(client, uuid, json, room, category);
+    LxControlInfoOnlyAnalog(LoxoneMiniserverHandlerApi handlerApi, LxUuid uuid, LxJsonControl json, LxContainer room,
+            LxCategory category) {
+        // super constructor will call update() and populate format
+        super(handlerApi, uuid, json, room, category);
+        addChannel("Number", new ChannelTypeUID(BINDING_ID, MINISERVER_CHANNEL_TYPE_RO_ANALOG), defaultChannelId,
+                defaultChannelLabel, "Analog virtual state", tags);
+        if (format != null) {
+            addChannelStateDescription(defaultChannelId, new StateDescription(null, null, null, format, true, null));
+        }
     }
 
     /**
@@ -78,7 +95,7 @@ public class LxControlInfoOnlyAnalog extends LxControl {
      *            New category that this control belongs to
      */
     @Override
-    void update(LxJsonControl json, LxContainer room, LxCategory category) {
+    public void update(LxJsonControl json, LxContainer room, LxCategory category) {
         super.update(json, room, category);
         if (json.details != null && json.details.format != null) {
             format = json.details.format;
@@ -87,37 +104,19 @@ public class LxControlInfoOnlyAnalog extends LxControl {
         }
     }
 
-    /**
-     * Obtain current value of an analog virtual state, expressed in a format configured on the Miniserver
-     *
-     * @return
-     *         string for the value of the state or null if current value is not compatible with this control
-     */
-    public String getFormattedValue() {
-        Double value = getStateValue(STATE_VALUE);
-        if (value != null) {
-            return String.format(format, value);
+    @Override
+    public void handleCommand(ChannelUID channelId, Command command) throws IOException {
+        // no commands to handle
+    }
+
+    @Override
+    public State getChannelState(ChannelUID channelId) {
+        if (defaultChannelId.equals(channelId)) {
+            Double value = getStateValue(STATE_VALUE);
+            if (value != null) {
+                return new DecimalType(value);
+            }
         }
         return null;
-    }
-
-    /**
-     * Obtain format string used to convert control's value into text
-     *
-     * @return
-     *         string with format
-     */
-    public String getFormatString() {
-        return format;
-    }
-
-    /**
-     * Obtain current value of an analog virtual state, expressed as a number
-     *
-     * @return
-     *         value of the state or null if current value is not compatible with this control
-     */
-    public Double getValue() {
-        return getStateValue(STATE_VALUE);
     }
 }

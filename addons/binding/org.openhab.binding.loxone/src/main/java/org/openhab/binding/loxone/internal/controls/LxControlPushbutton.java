@@ -6,11 +6,18 @@
  * which accompanies this distribution, and is available at
  * http://www.eclipse.org/legal/epl-v10.html
  */
-package org.openhab.binding.loxone.internal.core;
+package org.openhab.binding.loxone.internal.controls;
 
 import java.io.IOException;
 
+import org.eclipse.smarthome.core.library.types.OnOffType;
+import org.eclipse.smarthome.core.thing.ChannelUID;
+import org.eclipse.smarthome.core.types.Command;
+import org.openhab.binding.loxone.handler.LoxoneMiniserverHandlerApi;
+import org.openhab.binding.loxone.internal.core.LxCategory;
+import org.openhab.binding.loxone.internal.core.LxContainer;
 import org.openhab.binding.loxone.internal.core.LxJsonApp3.LxJsonControl;
+import org.openhab.binding.loxone.internal.core.LxUuid;
 
 /**
  * A pushbutton type of control on Loxone Miniserver.
@@ -24,8 +31,9 @@ public class LxControlPushbutton extends LxControlSwitch {
 
     static class Factory extends LxControlInstance {
         @Override
-        LxControl create(LxWsClient client, LxUuid uuid, LxJsonControl json, LxContainer room, LxCategory category) {
-            return new LxControlPushbutton(client, uuid, json, room, category);
+        LxControl create(LoxoneMiniserverHandlerApi handlerApi, LxUuid uuid, LxJsonControl json, LxContainer room,
+                LxCategory category) {
+            return new LxControlPushbutton(handlerApi, uuid, json, room, category);
         }
 
         @Override
@@ -46,8 +54,8 @@ public class LxControlPushbutton extends LxControlSwitch {
     /**
      * Create pushbutton control object.
      *
-     * @param client
-     *            communication client used to send commands to the Miniserver
+     * @param handlerApi
+     *            thing handler object representing the Miniserver
      * @param uuid
      *            switch's UUID
      * @param json
@@ -57,19 +65,19 @@ public class LxControlPushbutton extends LxControlSwitch {
      * @param category
      *            category to which switch belongs
      */
-    LxControlPushbutton(LxWsClient client, LxUuid uuid, LxJsonControl json, LxContainer room, LxCategory category) {
-        super(client, uuid, json, room, category);
+    LxControlPushbutton(LoxoneMiniserverHandlerApi handlerApi, LxUuid uuid, LxJsonControl json, LxContainer room,
+            LxCategory category) {
+        super(handlerApi, uuid, json, room, category);
     }
 
-    /**
-     * Set pushbutton to ON and to OFF (tap it).
-     * <p>
-     * Sends a command to operate the pushbutton.
-     *
-     * @throws IOException
-     *             when something went wrong with communication
-     */
-    public void pulse() throws IOException {
-        socketClient.sendAction(uuid, CMD_PULSE);
+    @Override
+    public void handleCommand(ChannelUID channelId, Command command) throws IOException {
+        if (command instanceof OnOffType) {
+            if ((OnOffType) command == OnOffType.ON) {
+                sendAction(CMD_PULSE);
+            } else {
+                off();
+            }
+        }
     }
 }

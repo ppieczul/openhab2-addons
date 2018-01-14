@@ -15,7 +15,7 @@ import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.URL;
-import java.util.concurrent.BlockingQueue;
+import java.net.UnknownHostException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
@@ -35,9 +35,10 @@ import org.eclipse.jetty.websocket.api.annotations.WebSocket;
 import org.eclipse.jetty.websocket.client.ClientUpgradeRequest;
 import org.eclipse.jetty.websocket.client.WebSocketClient;
 import org.eclipse.smarthome.core.common.ThreadPoolManager;
+import org.openhab.binding.loxone.handler.LoxoneMiniserverHandlerApi;
+import org.openhab.binding.loxone.internal.config.LoxoneMiniserverConfig;
 import org.openhab.binding.loxone.internal.core.LxJsonResponse.LxJsonCfgApi;
 import org.openhab.binding.loxone.internal.core.LxJsonResponse.LxJsonSubResponse;
-import org.openhab.binding.loxone.internal.core.LxServer.Configuration;
 import org.openhab.binding.loxone.internal.core.LxServerEvent.EventType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,27 +55,28 @@ import com.google.gson.JsonSyntaxException;
  * @author Pawel Pieczul - initial contribution
  *
  */
-class LxWsClient {
-    private final Configuration configuration;
+public class LxWsClient {
+    private final LoxoneMiniserverHandlerApi handlerApi;
     private final InetAddress host;
     private final int port;
     private final String user;
     private final String password;
+    private final LxWsSecurityType securityType;
     private final int debugId;
+
     private long keepAlivePeriod = 240; // 4 minutes, server timeout is 5 minutes
-    private long connectTimeout = 4; // 4 seconds to wait for connection response
+    private long responseTimeout = 4; // 4 seconds to wait for Miniserver response
     private int maxBinMsgSize = 3 * 1024; // 3 MB
     private int maxTextMsgSize = 512; // 512 KB
 
     private String swVersion;
     private String macAddress;
-    private LxWsSecurityType securityType;
-    private final Gson gson = new Gson();
     private ScheduledFuture<?> timeout;
     private LxWebSocket socket;
     private WebSocketClient wsClient;
-    private BlockingQueue<LxServerEvent> queue;
     private ClientState state = ClientState.IDLE;
+
+    private final Gson gson = new Gson();
     private final Lock stateMachineLock = new ReentrantLock();
     private final Logger logger = LoggerFactory.getLogger(LxWsClient.class);
 
@@ -218,31 +220,39 @@ class LxWsClient {
      *
      * @param debugId
      *            instance of the client used for debugging purposes only
-     * @param queue
-     *            message queue to communicate with its master {@link LxServer}, must be already initialized
-     * @param configuration
-     *            configuration object for getting and setting custom properties
-     * @param securityType
-     *            type of authentication/encryption method to use
-     * @param host
-     *            Miniserver's host address
-     * @param port
-     *            Miniserver's web services port
-     * @param user
-     *            user to authenticate
-     * @param password
-     *            password to authenticate
+     * @param handlerApi
+     *            API to the thing handler
+     * @param cfg
+     *            Miniserver configuration
+     * @throws UnknownHostException
+     *             when host can't be resolved or reached
      */
-    LxWsClient(int debugId, BlockingQueue<LxServerEvent> queue, Configuration configuration,
-            LxWsSecurityType securityType, InetAddress host, int port, String user, String password) {
+    public LxWsClient(int debugId, LoxoneMiniserverHandlerApi handlerApi, LoxoneMiniserverConfig cfg)
+            throws UnknownHostException {
         this.debugId = debugId;
-        this.queue = queue;
-        this.configuration = configuration;
-        this.securityType = securityType;
-        this.host = host;
-        this.port = port;
-        this.user = user;
-        this.password = password;
+        this.handlerApi = handlerApi;
+        host = InetAddress.getByName(cfg.host);
+        port = cfg.port;
+        user = cfg.user;
+        password = cfg.password;
+        securityType = LxWsSecurityType.getType(cfg.authMethod);
+
+        if (cfg.keepAlivePeriod > 0 && cfg.keepAlivePeriod != keepAlivePeriod) {
+            logger.debug("[{}] Changing keepAlivePeriod to {}", debugId, cfg.keepAlivePeriod);
+            keepAlivePeriod = cfg.keepAlivePeriod;
+        }
+        if (cfg.responseTimeout > 0 && cfg.responseTimeout != responseTimeout) {
+            logger.debug("[{}] Changing responseTimeout to {}", debugId, cfg.responseTimeout);
+            responseTimeout = cfg.responseTimeout;
+        }
+        if (cfg.maxBinMsgSize > 0 && cfg.maxBinMsgSize != maxBinMsgSize) {
+            logger.debug("[{}] Changing maxBinMsgSize to {}", debugId, cfg.maxBinMsgSize);
+            maxBinMsgSize = cfg.maxBinMsgSize;
+        }
+        if (cfg.maxTextMsgSize > 0 && cfg.maxTextMsgSize != maxTextMsgSize) {
+            logger.debug("[{}] Changing maxTextMsgSize to {}", debugId, cfg.maxTextMsgSize);
+            maxTextMsgSize = cfg.maxTextMsgSize;
+        }
     }
 
     /**
@@ -252,7 +262,7 @@ class LxWsClient {
      * @return
      *         true if connection request initiated correctly, false if not
      */
-    boolean connect() {
+    public boolean connect() {
         logger.trace("[{}] connect() websocket", debugId);
         stateMachineLock.lock();
         try {
@@ -338,7 +348,7 @@ class LxWsClient {
      * Disconnect from the websocket.
      * After calling this method, client is ready to perform a new connection request with {@link #connect()}.
      */
-    void disconnect() {
+    public void disconnect() {
         disconnect("Disconnecting websocket client");
     }
 
@@ -392,61 +402,25 @@ class LxWsClient {
     }
 
     /**
-     * Update configuration parameter(s) in runtime.
-     * Calling this method will not interrupt existing services, changes will take effect when new values are used next
-     * time.
-     *
-     * @param keepAlivePeriod
-     *            new period between keep alive messages, in seconds
-     * @param connectTimeout
-     *            Time to wait for websocket connect response from the Miniserver
-     * @param maxBinMsgSize
-     *            maximum binary message size of websocket client (in kB)
-     * @param maxTextMsgSize
-     *            maximum text message size of websocket client (in kB)
-     */
-    void update(int keepAlivePeriod, int connectTimeout, int maxBinMsgSize, int maxTextMsgSize) {
-        if (keepAlivePeriod > 0 && this.keepAlivePeriod != keepAlivePeriod) {
-            logger.debug("[{}] Changing keepAlivePeriod to {}", debugId, keepAlivePeriod);
-            this.keepAlivePeriod = keepAlivePeriod;
-        }
-        if (connectTimeout > 0 && this.connectTimeout != connectTimeout) {
-            logger.debug("[{}] Changing connectTimeout to {}", debugId, connectTimeout);
-            this.connectTimeout = connectTimeout;
-        }
-        if (maxBinMsgSize > 0 && this.maxBinMsgSize != maxBinMsgSize) {
-            logger.debug("[{}] Changing maxBinMsgSize to {}", debugId, maxBinMsgSize);
-            this.maxBinMsgSize = maxBinMsgSize;
-        }
-        if (maxTextMsgSize > 0 && this.maxTextMsgSize != maxTextMsgSize) {
-            logger.debug("[{}] Changing maxTextMsgSize to {}", debugId, maxTextMsgSize);
-            this.maxTextMsgSize = maxTextMsgSize;
-        }
-    }
-
-    /**
      * Sends an action to a Loxone Miniserver's control.
      *
      * @param id
      *            identifier of the control
      * @param operation
      *            identifier of the operation
-     * @return
-     *         true if action was executed by the Miniserver
+     * @throws IOException
+     *             when communication error with Miniserver occurs
      */
-    boolean sendAction(LxUuid id, String operation) {
+    public void sendAction(LxUuid id, String operation) throws IOException {
         String command = CMD_ACTION + id.getOriginalString() + "/" + operation;
         logger.debug("[{}] Sending command {}", debugId, command);
         LxJsonSubResponse response = socket.sendCmdWithResp(command, true, true);
         if (response == null) {
-            logger.debug("[{}] Error sending command {}", debugId, command);
-            return false;
+            throw new IOException("Error sending command " + command);
         }
         if (response.code != 200) {
-            logger.debug("[{}] Received error response {} to command {}", debugId, response.code, command);
-            return false;
+            throw new IOException("Received response with error code " + response.code + " to command " + command);
         }
-        return true;
     }
 
     /**
@@ -480,7 +454,7 @@ class LxWsClient {
      */
     private void startResponseTimeout() {
         stopResponseTimeout();
-        timeout = SCHEDULER.schedule(this::responseTimeout, connectTimeout, TimeUnit.SECONDS);
+        timeout = SCHEDULER.schedule(this::responseTimeout, responseTimeout, TimeUnit.SECONDS);
     }
 
     /**
@@ -528,11 +502,7 @@ class LxWsClient {
             localReason = reason;
         }
         LxServerEvent sync = new LxServerEvent(event, localReason, object);
-        try {
-            queue.put(sync);
-        } catch (InterruptedException e) {
-            logger.debug("[{}] Interrupted queue operation", debugId);
-        }
+        handlerApi.sendEvent(sync);
     }
 
     /**
@@ -570,7 +540,7 @@ class LxWsClient {
                 this.session = session;
                 setClientState(ClientState.CONNECTED);
 
-                security = LxWsSecurity.create(securityType, swVersion, debugId, configuration, socket, user, password);
+                security = LxWsSecurity.create(securityType, swVersion, debugId, handlerApi, socket, user, password);
                 security.authenticate((result, details) -> {
                     if (result == LxOfflineReason.NONE) {
                         authenticated();
@@ -826,7 +796,7 @@ class LxWsClient {
                 LxJsonSubResponse response = commandResponse;
                 syncRequest = sync;
                 if (sync) {
-                    if (!responseAvailable.await(connectTimeout, TimeUnit.SECONDS)) {
+                    if (!responseAvailable.await(responseTimeout, TimeUnit.SECONDS)) {
                         commandResponse = null;
                         responseTimeout();
                         return null;

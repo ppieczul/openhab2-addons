@@ -58,11 +58,22 @@ public class LoxoneDynamicStateDescriptionProvider implements DynamicStateDescri
         descriptions.clear();
     }
 
+    /**
+     * Removes a state description for a given channel ID
+     *
+     * @param channelUID
+     *            channel ID to remove description for
+     */
+    public void removeDescription(ChannelUID channelUID) {
+        logger.debug("Removing state description for channel {}", channelUID);
+        descriptions.remove(channelUID);
+    }
+
     @Override
     public @Nullable StateDescription getStateDescription(Channel channel,
             @Nullable StateDescription originalStateDescription, @Nullable Locale locale) {
         StateDescription description = descriptions.get(channel.getUID());
-        logger.trace("Providing state description for channel {}", channel.getUID());
+        logger.debug("Providing state description for channel {}", channel.getUID());
         return description;
     }
 }

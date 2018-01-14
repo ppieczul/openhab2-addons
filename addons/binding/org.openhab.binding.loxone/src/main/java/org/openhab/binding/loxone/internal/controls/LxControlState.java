@@ -6,10 +6,11 @@
  * which accompanies this distribution, and is available at
  * http://www.eclipse.org/legal/epl-v10.html
  */
-package org.openhab.binding.loxone.internal.core;
+package org.openhab.binding.loxone.internal.controls;
 
-import java.util.ArrayList;
-import java.util.List;
+import org.openhab.binding.loxone.internal.core.LxUuid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A state of a Loxone control ({@link LxControl})
@@ -24,13 +25,13 @@ import java.util.List;
  * @author Pawel Pieczul - initial contribution
  *
  */
-class LxControlState {
+public class LxControlState {
     private LxUuid uuid;
     private String name;
     private Double value;
     private String textValue;
     private LxControl control;
-    private List<LxControlStateListener> listeners = new ArrayList<>();
+    private final Logger logger = LoggerFactory.getLogger(LxControlState.class);
 
     /**
      * Create a control state object.
@@ -50,6 +51,16 @@ class LxControlState {
     }
 
     /**
+     * Gets UUID of the state
+     *
+     * @return
+     *         state's UUID
+     */
+    public LxUuid getUuid() {
+        return uuid;
+    }
+
+    /**
      * Sets current value of the control's state
      *
      * @param value
@@ -57,7 +68,10 @@ class LxControlState {
      * @param textValue
      *            current state's text value to set
      */
-    void setValue(Double value, String textValue) {
+    public void setValue(Double value, String textValue) {
+        logger.debug("State set ({},{}) control ({},{}) value={}, textValue={}", uuid, name, control.uuid,
+                control.getName(), value, textValue);
+
         boolean changed = false;
 
         uuid.setUpdate(true);
@@ -73,9 +87,7 @@ class LxControlState {
         }
 
         if (changed) {
-            for (LxControlStateListener listener : listeners) {
-                listener.onStateChange(this);
-            }
+            control.onStateChange(this);
         }
     }
 
@@ -141,35 +153,4 @@ class LxControlState {
         this.name = name;
         uuid.setUpdate(true);
     }
-
-    /**
-     * Gets UUID of the state
-     *
-     * @return
-     *         state's UUID
-     */
-    LxUuid getUuid() {
-        return uuid;
-    }
-
-    /**
-     * Adds a listener to state changes
-     *
-     * @param listener
-     *            an object implementing state change listener interface
-     */
-    void addListener(LxControlStateListener listener) {
-        listeners.add(listener);
-    }
-
-    /**
-     * Removes a listener of state changes
-     *
-     * @param listener
-     *            listener object to remove
-     */
-    void removeListener(LxControlStateListener listener) {
-        listeners.remove(listener);
-    }
-
 }
